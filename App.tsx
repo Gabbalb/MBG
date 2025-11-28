@@ -1,5 +1,5 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { INITIAL_BOOKS } from './constants';
 import { Book, BookFormData, Subscriber, PageView } from './types';
 import { BookCard } from './components/BookCard';
 import { AdminModal } from './components/AdminModal';
@@ -10,12 +10,15 @@ import { BookDetailsModal } from './components/BookDetailsModal';
 import { BeliefsView } from './components/BeliefsView';
 import { CoursesView } from './components/CoursesView';
 import { Button } from './components/Button';
+import { db } from './services/db';
+import { sanitizeInput, validatePrice } from './utils/security';
 import { Library, Search, Plus, Menu, X, Facebook, Twitter, Instagram, Upload, Filter, LogOut, User, Mail, Send, ChevronRight } from 'lucide-react';
 
 function App() {
   const [books, setBooks] = useState<Book[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [currentView, setCurrentView] = useState<PageView>('home');
+  const [isLoading, setIsLoading] = useState(true);
   
   // Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -36,45 +39,38 @@ function App() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load books & subscribers
+  // Initialize Data
   useEffect(() => {
-    const savedBooks = localStorage.getItem('lumina_library_books');
-    const savedSubs = localStorage.getItem('lumina_library_subs');
-    
-    if (savedBooks) {
-      setBooks(JSON.parse(savedBooks));
-    } else {
-      setBooks(INITIAL_BOOKS);
-    }
-
-    if (savedSubs) {
-        setSubscribers(JSON.parse(savedSubs));
-    }
+    const initData = async () => {
+      await db.init();
+      const loadedBooks = await db.getBooks();
+      const loadedSubs = await db.getSubscribers();
+      setBooks(loadedBooks);
+      setSubscribers(loadedSubs);
+      setIsLoading(false);
+    };
+    initData();
   }, []);
 
-  // Persist Data
-  useEffect(() => {
-    if (books.length > 0) localStorage.setItem('lumina_library_books', JSON.stringify(books));
-  }, [books]);
+  // Book Management Logic (Secure)
+  const handleSaveBook = async (formData: BookFormData) => {
+    try {
+      const savedBook = await db.saveBook({
+        id: editingBook?.id,
+        ...formData,
+        price: validatePrice(formData.price)
+      });
 
-  useEffect(() => {
-    localStorage.setItem('lumina_library_subs', JSON.stringify(subscribers));
-  }, [subscribers]);
-
-  // Book Management Logic
-  const handleSaveBook = (formData: BookFormData) => {
-    if (editingBook) {
-        // Update existing
-        setBooks(prev => prev.map(b => b.id === editingBook.id ? { ...b, ...formData, price: parseFloat(formData.price) } : b));
-        setEditingBook(null);
-    } else {
-        // Add new
-        const newBook: Book = {
-            id: Date.now().toString(),
-            ...formData,
-            price: parseFloat(formData.price),
-        };
-        setBooks(prev => [newBook, ...prev]);
+      setBooks(prev => {
+        if (editingBook) {
+          return prev.map(b => b.id === savedBook.id ? savedBook : b);
+        } else {
+          return [savedBook, ...prev];
+        }
+      });
+      setEditingBook(null);
+    } catch (error) {
+      alert("Error saving book: " + (error as Error).message);
     }
   };
 
@@ -88,13 +84,14 @@ function App() {
       setEditingBook(null);
   };
 
-  const handleRemoveBook = (id: string) => {
+  const handleRemoveBook = async (id: string) => {
     if (window.confirm("Are you sure you want to remove this book from the collection?")) {
+        await db.deleteBook(id);
         setBooks(prev => prev.filter(b => b.id !== id));
     }
   };
 
-  // Import Logic (CSV & XML)
+  // Import Logic (CSV & XML) with Sanitization
   const handleDataImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -110,11 +107,10 @@ function App() {
         }
     };
     reader.readAsText(file);
-    // Reset input
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const parseCSVImport = (text: string) => {
+  const parseCSVImport = async (text: string) => {
     const lines = text.split('\n');
     const newBooks: Book[] = [];
     const startIndex = lines[0].toLowerCase().includes('title') ? 1 : 0;
@@ -125,21 +121,26 @@ function App() {
         
         const parts = line.split(',');
         if (parts.length >= 4) {
-            newBooks.push({
-                id: Date.now().toString() + i,
-                title: parts[0].trim(),
-                author: parts[1].trim(),
-                price: parseFloat(parts[2].trim()) || 0,
-                genre: parts[3].trim(),
-                description: parts.slice(4).join(',').trim() || "Imported via CSV",
-                coverUrl: `https://picsum.photos/seed/${Math.random()}/400/600`
-            });
+            // Using DB save logic individually to ensure validation
+            try {
+               const book = await db.saveBook({
+                  title: parts[0].trim(),
+                  author: parts[1].trim(),
+                  price: validatePrice(parts[2].trim()),
+                  genre: parts[3].trim(),
+                  description: parts.slice(4).join(',').trim() || "Imported via CSV",
+                  coverUrl: `https://picsum.photos/seed/${Math.random()}/400/600`
+               });
+               newBooks.push(book);
+            } catch (e) {
+              console.warn("Skipping invalid CSV row", i);
+            }
         }
     }
     finalizeImport(newBooks);
   };
 
-  const parseXMLImport = (xmlText: string) => {
+  const parseXMLImport = async (xmlText: string) => {
     try {
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlText, "text/xml");
@@ -149,7 +150,6 @@ function App() {
         // 1. Build a map of Attachment IDs to URLs
         const imageMap: Record<string, string> = {};
         
-        // Pass 1: Find attachments
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
             const postType = item.getElementsByTagName("wp:post_type")[0]?.textContent;
@@ -158,7 +158,7 @@ function App() {
                 const postId = item.getElementsByTagName("wp:post_id")[0]?.textContent;
                 const attachmentUrl = item.getElementsByTagName("wp:attachment_url")[0]?.textContent;
                 if (postId && attachmentUrl) {
-                    imageMap[postId] = attachmentUrl;
+                    imageMap[postId] = sanitizeInput(attachmentUrl); // Sanitize URL
                 }
             }
         }
@@ -168,22 +168,16 @@ function App() {
             const item = items[i];
             const postType = item.getElementsByTagName("wp:post_type")[0]?.textContent;
 
-            // Adjust 'books' to whatever custom post type your XML uses, based on file it seems to be 'books'
             if (postType === 'books' || postType === 'post' || postType === 'product') {
                 const title = item.getElementsByTagName("title")[0]?.textContent || "Unknown Title";
                 let rawContent = item.getElementsByTagName("content:encoded")[0]?.textContent || "";
                 
-                // Extract Price from content (e.g., "€ 12,00")
                 let price = 0;
                 const priceMatch = rawContent.match(/€\s*([\d,.]+)/);
                 if (priceMatch) {
-                    // Replace comma with dot for parsing
                     price = parseFloat(priceMatch[1].replace(',', '.'));
-                    // Clean price from description if desired
-                    // rawContent = rawContent.replace(priceMatch[0], '').trim(); 
                 }
 
-                // Extract Meta Data (Author, Thumbnail ID)
                 let author = "Unknown Author";
                 let thumbnailId = "";
                 
@@ -196,29 +190,32 @@ function App() {
                     if (key === '_thumbnail_id' && value) thumbnailId = value;
                 }
 
-                // Extract Category
                 let genre = "General";
                 const categories = item.getElementsByTagName("category");
                 for (let k = 0; k < categories.length; k++) {
                     const domain = categories[k].getAttribute("domain");
                     if (domain === "category" || domain === "book_category") {
                         genre = categories[k].textContent || genre;
-                        break; // Just take the first one
+                        break; 
                     }
                 }
 
-                // Get cover from map
                 const coverUrl = imageMap[thumbnailId] || `https://picsum.photos/seed/${Math.random()}/400/600`;
 
-                newBooks.push({
-                    id: Date.now().toString() + i,
-                    title: title,
-                    author: author,
-                    price: price,
-                    genre: genre,
-                    description: rawContent.replace(/<[^>]*>?/gm, '').substring(0, 300) + (rawContent.length > 300 ? '...' : ''), // Strip HTML and truncate
-                    coverUrl: coverUrl
-                });
+                // Safe Save through DB Service
+                try {
+                    const book = await db.saveBook({
+                        title,
+                        author,
+                        price,
+                        genre,
+                        description: rawContent.replace(/<[^>]*>?/gm, '').substring(0, 300), // Basic strip tags
+                        coverUrl
+                    });
+                    newBooks.push(book);
+                } catch(e) {
+                    console.warn("Skipping invalid XML item", title);
+                }
             }
         }
         finalizeImport(newBooks);
@@ -250,24 +247,22 @@ function App() {
   });
 
   // Mailing List Logic
-  const handleSubscribe = (e: React.FormEvent) => {
+  const handleSubscribe = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newsletterEmail) return;
-    if (subscribers.some(s => s.email === newsletterEmail)) {
-        alert("You are already subscribed!");
-        return;
+    
+    try {
+        const newSub = await db.addSubscriber(newsletterEmail);
+        setSubscribers(prev => [...prev, newSub]);
+        setNewsletterEmail('');
+        alert("Thanks for subscribing!");
+    } catch (e) {
+        alert((e as Error).message);
     }
-    const newSub: Subscriber = {
-        id: Date.now().toString(),
-        email: newsletterEmail,
-        joinedAt: new Date().toISOString()
-    };
-    setSubscribers(prev => [...prev, newSub]);
-    setNewsletterEmail('');
-    alert("Thanks for subscribing!");
   };
 
-  const handleRemoveSubscriber = (id: string) => {
+  const handleRemoveSubscriber = async (id: string) => {
+      await db.removeSubscriber(id);
       setSubscribers(prev => prev.filter(s => s.id !== id));
   };
 
@@ -276,7 +271,6 @@ function App() {
       setIsMobileMenuOpen(false);
   };
 
-  // Group books by genre for the carousel view
   const booksByGenre = React.useMemo(() => {
     const groups: { [key: string]: Book[] } = {};
     books.forEach(book => {
@@ -290,7 +284,6 @@ function App() {
 
   const showCarousels = searchQuery === '' && selectedGenre === 'All';
 
-  // Navigation handlers
   const navigateToHome = () => {
       setCurrentView('home');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -310,6 +303,10 @@ function App() {
       window.scrollTo({ top: 0, behavior: 'smooth' });
       setIsMobileMenuOpen(false);
   };
+
+  if (isLoading) {
+      return <div className="min-h-screen flex items-center justify-center text-stone-500">Loading Library...</div>;
+  }
 
   return (
     <div className="min-h-screen flex flex-col font-sans text-stone-800">

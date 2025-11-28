@@ -1,6 +1,8 @@
+
 import React, { useState } from 'react';
 import { X, Lock } from 'lucide-react';
 import { Button } from './Button';
+import { hashPassword } from '../utils/security';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -12,19 +14,35 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  // SHA-256 hash for 'password'
+  // In a real app, this hash would come from the database/API
+  const TARGET_HASH = '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8';
+  const TARGET_USER = 'admin';
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (username === 'admin' && password === 'password') {
-        onLogin();
-        setError('');
-        setUsername('');
-        setPassword('');
-        onClose();
-    } else {
-        setError('Invalid credentials');
+    setIsLoading(true);
+    setError('');
+
+    try {
+      const passwordHash = await hashPassword(password);
+      
+      if (username === TARGET_USER && passwordHash === TARGET_HASH) {
+          onLogin();
+          setUsername('');
+          setPassword('');
+          onClose();
+      } else {
+          setError('Invalid credentials');
+      }
+    } catch (err) {
+      setError('Authentication failed. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -47,6 +65,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full rounded-lg border border-stone-300 px-4 py-2 focus:ring-2 focus:ring-primary-500 outline-none"
+                disabled={isLoading}
               />
             </div>
             <div>
@@ -57,12 +76,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full rounded-lg border border-stone-300 px-4 py-2 pl-10 focus:ring-2 focus:ring-primary-500 outline-none"
+                    disabled={isLoading}
                 />
                 <Lock className="absolute left-3 top-2.5 text-stone-400" size={16} />
               </div>
             </div>
             <div className="pt-2">
-                <Button type="submit" variant="primary" className="w-full">Sign In</Button>
+                <Button type="submit" variant="primary" className="w-full" isLoading={isLoading}>Sign In</Button>
             </div>
         </form>
       </div>

@@ -1,21 +1,31 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { INITIAL_BOOKS } from './constants';
-import { Book, BookFormData, Subscriber } from './types';
+import { Book, BookFormData, Subscriber, PageView } from './types';
 import { BookCard } from './components/BookCard';
 import { AdminModal } from './components/AdminModal';
 import { LoginModal } from './components/LoginModal';
 import { ContactModal } from './components/ContactModal';
 import { MailingListModal } from './components/MailingListModal';
+import { BookDetailsModal } from './components/BookDetailsModal';
+import { BeliefsView } from './components/BeliefsView';
+import { CoursesView } from './components/CoursesView';
 import { Button } from './components/Button';
 import { Library, Search, Plus, Menu, X, Facebook, Twitter, Instagram, Upload, Filter, LogOut, User, Mail, Send, ChevronRight } from 'lucide-react';
 
 function App() {
   const [books, setBooks] = useState<Book[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [currentView, setCurrentView] = useState<PageView>('home');
+  
+  // Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isContactOpen, setIsContactOpen] = useState(false);
   const [isMailingListOpen, setIsMailingListOpen] = useState(false);
+  
+  // Selection state
+  const [selectedBook, setSelectedBook] = useState<Book | null>(null);
+  const [editingBook, setEditingBook] = useState<Book | null>(null);
   
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGenre, setSelectedGenre] = useState('All');
@@ -24,7 +34,7 @@ function App() {
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [newsletterEmail, setNewsletterEmail] = useState('');
   
-  const csvInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load books & subscribers
   useEffect(() => {
@@ -51,13 +61,31 @@ function App() {
     localStorage.setItem('lumina_library_subs', JSON.stringify(subscribers));
   }, [subscribers]);
 
-  const handleAddBook = (formData: BookFormData) => {
-    const newBook: Book = {
-      id: Date.now().toString(),
-      ...formData,
-      price: parseFloat(formData.price),
-    };
-    setBooks(prev => [newBook, ...prev]);
+  // Book Management Logic
+  const handleSaveBook = (formData: BookFormData) => {
+    if (editingBook) {
+        // Update existing
+        setBooks(prev => prev.map(b => b.id === editingBook.id ? { ...b, ...formData, price: parseFloat(formData.price) } : b));
+        setEditingBook(null);
+    } else {
+        // Add new
+        const newBook: Book = {
+            id: Date.now().toString(),
+            ...formData,
+            price: parseFloat(formData.price),
+        };
+        setBooks(prev => [newBook, ...prev]);
+    }
+  };
+
+  const handleEditClick = (book: Book) => {
+      setEditingBook(book);
+      setIsModalOpen(true);
+  };
+
+  const handleModalClose = () => {
+      setIsModalOpen(false);
+      setEditingBook(null);
   };
 
   const handleRemoveBook = (id: string) => {
@@ -66,50 +94,148 @@ function App() {
     }
   };
 
-  // CSV Import Logic
-  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Import Logic (CSV & XML)
+  const handleDataImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = (event) => {
         const text = event.target?.result as string;
-        // Simple CSV parser (Assumes format: Title,Author,Price,Genre,Description)
-        const lines = text.split('\n');
-        const newBooks: Book[] = [];
         
-        // Skip header if present (simple check)
-        const startIndex = lines[0].toLowerCase().includes('title') ? 1 : 0;
-
-        for (let i = startIndex; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-            
-            // Handle quotes or simple comma split
-            const parts = line.split(',');
-            if (parts.length >= 4) {
-                newBooks.push({
-                    id: Date.now().toString() + i,
-                    title: parts[0].trim(),
-                    author: parts[1].trim(),
-                    price: parseFloat(parts[2].trim()) || 0,
-                    genre: parts[3].trim(),
-                    description: parts.slice(4).join(',').trim() || "Imported via CSV",
-                    coverUrl: `https://picsum.photos/seed/${Math.random()}/400/600` // Random cover for CSV imports
-                });
-            }
-        }
-
-        if (newBooks.length > 0) {
-            setBooks(prev => [...newBooks, ...prev]);
-            alert(`Successfully imported ${newBooks.length} books.`);
+        if (file.name.toLowerCase().endsWith('.xml')) {
+            parseXMLImport(text);
         } else {
-            alert("No valid books found in CSV.");
+            parseCSVImport(text);
         }
     };
     reader.readAsText(file);
     // Reset input
-    if (csvInputRef.current) csvInputRef.current.value = '';
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const parseCSVImport = (text: string) => {
+    const lines = text.split('\n');
+    const newBooks: Book[] = [];
+    const startIndex = lines[0].toLowerCase().includes('title') ? 1 : 0;
+
+    for (let i = startIndex; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        const parts = line.split(',');
+        if (parts.length >= 4) {
+            newBooks.push({
+                id: Date.now().toString() + i,
+                title: parts[0].trim(),
+                author: parts[1].trim(),
+                price: parseFloat(parts[2].trim()) || 0,
+                genre: parts[3].trim(),
+                description: parts.slice(4).join(',').trim() || "Imported via CSV",
+                coverUrl: `https://picsum.photos/seed/${Math.random()}/400/600`
+            });
+        }
+    }
+    finalizeImport(newBooks);
+  };
+
+  const parseXMLImport = (xmlText: string) => {
+    try {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+        const items = xmlDoc.getElementsByTagName("item");
+        const newBooks: Book[] = [];
+        
+        // 1. Build a map of Attachment IDs to URLs
+        const imageMap: Record<string, string> = {};
+        
+        // Pass 1: Find attachments
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const postType = item.getElementsByTagName("wp:post_type")[0]?.textContent;
+            
+            if (postType === 'attachment') {
+                const postId = item.getElementsByTagName("wp:post_id")[0]?.textContent;
+                const attachmentUrl = item.getElementsByTagName("wp:attachment_url")[0]?.textContent;
+                if (postId && attachmentUrl) {
+                    imageMap[postId] = attachmentUrl;
+                }
+            }
+        }
+
+        // Pass 2: Parse Books
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const postType = item.getElementsByTagName("wp:post_type")[0]?.textContent;
+
+            // Adjust 'books' to whatever custom post type your XML uses, based on file it seems to be 'books'
+            if (postType === 'books' || postType === 'post' || postType === 'product') {
+                const title = item.getElementsByTagName("title")[0]?.textContent || "Unknown Title";
+                let rawContent = item.getElementsByTagName("content:encoded")[0]?.textContent || "";
+                
+                // Extract Price from content (e.g., "€ 12,00")
+                let price = 0;
+                const priceMatch = rawContent.match(/€\s*([\d,.]+)/);
+                if (priceMatch) {
+                    // Replace comma with dot for parsing
+                    price = parseFloat(priceMatch[1].replace(',', '.'));
+                    // Clean price from description if desired
+                    // rawContent = rawContent.replace(priceMatch[0], '').trim(); 
+                }
+
+                // Extract Meta Data (Author, Thumbnail ID)
+                let author = "Unknown Author";
+                let thumbnailId = "";
+                
+                const metaTags = item.getElementsByTagName("wp:postmeta");
+                for (let j = 0; j < metaTags.length; j++) {
+                    const key = metaTags[j].getElementsByTagName("wp:meta_key")[0]?.textContent;
+                    const value = metaTags[j].getElementsByTagName("wp:meta_value")[0]?.textContent;
+                    
+                    if (key === 'wbg_author' && value) author = value;
+                    if (key === '_thumbnail_id' && value) thumbnailId = value;
+                }
+
+                // Extract Category
+                let genre = "General";
+                const categories = item.getElementsByTagName("category");
+                for (let k = 0; k < categories.length; k++) {
+                    const domain = categories[k].getAttribute("domain");
+                    if (domain === "category" || domain === "book_category") {
+                        genre = categories[k].textContent || genre;
+                        break; // Just take the first one
+                    }
+                }
+
+                // Get cover from map
+                const coverUrl = imageMap[thumbnailId] || `https://picsum.photos/seed/${Math.random()}/400/600`;
+
+                newBooks.push({
+                    id: Date.now().toString() + i,
+                    title: title,
+                    author: author,
+                    price: price,
+                    genre: genre,
+                    description: rawContent.replace(/<[^>]*>?/gm, '').substring(0, 300) + (rawContent.length > 300 ? '...' : ''), // Strip HTML and truncate
+                    coverUrl: coverUrl
+                });
+            }
+        }
+        finalizeImport(newBooks);
+
+    } catch (e) {
+        console.error("XML Parsing Error", e);
+        alert("Failed to parse XML file. Please check the format.");
+    }
+  };
+
+  const finalizeImport = (newBooks: Book[]) => {
+    if (newBooks.length > 0) {
+        setBooks(prev => [...newBooks, ...prev]);
+        alert(`Successfully imported ${newBooks.length} books.`);
+    } else {
+        alert("No valid books found in the file.");
+    }
   };
 
   // Filter Logic
@@ -164,6 +290,27 @@ function App() {
 
   const showCarousels = searchQuery === '' && selectedGenre === 'All';
 
+  // Navigation handlers
+  const navigateToHome = () => {
+      setCurrentView('home');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      setIsMobileMenuOpen(false);
+  };
+
+  const navigateToCollection = () => {
+      setCurrentView('home');
+      setTimeout(() => {
+          document.getElementById('collection')?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+      setIsMobileMenuOpen(false);
+  };
+
+  const navigateTo = (view: PageView) => {
+      setCurrentView(view);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      setIsMobileMenuOpen(false);
+  };
+
   return (
     <div className="min-h-screen flex flex-col font-sans text-stone-800">
       
@@ -173,7 +320,10 @@ function App() {
           <div className="flex justify-between items-center h-16">
             
             {/* Logo */}
-            <div className="flex items-center gap-2">
+            <div 
+                className="flex items-center gap-2 cursor-pointer"
+                onClick={navigateToHome}
+            >
               <div className="bg-primary-600 p-2 rounded-lg text-white">
                 <Library size={24} />
               </div>
@@ -182,9 +332,11 @@ function App() {
 
             {/* Desktop Nav */}
             <div className="hidden md:flex items-center gap-8">
-              <a href="#" className="text-stone-600 hover:text-primary-600 font-medium text-sm transition-colors">Home</a>
-              <a href="#collection" className="text-stone-600 hover:text-primary-600 font-medium text-sm transition-colors">Collection</a>
-              <button onClick={() => setIsContactOpen(true)} className="text-stone-600 hover:text-primary-600 font-medium text-sm transition-colors">Contact</button>
+              <button onClick={navigateToHome} className={`text-sm font-medium transition-colors ${currentView === 'home' ? 'text-primary-600' : 'text-stone-600 hover:text-primary-600'}`}>Home</button>
+              <button onClick={navigateToCollection} className="text-stone-600 hover:text-primary-600 font-medium text-sm transition-colors">Collezione</button>
+              <button onClick={() => navigateTo('courses')} className={`text-sm font-medium transition-colors ${currentView === 'courses' ? 'text-primary-600' : 'text-stone-600 hover:text-primary-600'}`}>Corsi</button>
+              <button onClick={() => navigateTo('beliefs')} className={`text-sm font-medium transition-colors ${currentView === 'beliefs' ? 'text-primary-600' : 'text-stone-600 hover:text-primary-600'}`}>In Chi Crediamo</button>
+              <button onClick={() => setIsContactOpen(true)} className="text-stone-600 hover:text-primary-600 font-medium text-sm transition-colors">Contatti</button>
               
               <div className="w-px h-6 bg-stone-200 mx-2"></div>
               
@@ -222,9 +374,11 @@ function App() {
         {/* Mobile Menu Dropdown */}
         {isMobileMenuOpen && (
             <div className="md:hidden bg-white border-t border-stone-100 p-4 space-y-4 shadow-lg">
-                <a href="#" className="block text-stone-600 font-medium">Home</a>
-                <a href="#collection" className="block text-stone-600 font-medium">Collection</a>
-                <button onClick={() => setIsContactOpen(true)} className="block text-stone-600 font-medium w-full text-left">Contact</button>
+                <button onClick={navigateToHome} className="block text-stone-600 font-medium w-full text-left">Home</button>
+                <button onClick={navigateToCollection} className="block text-stone-600 font-medium w-full text-left">Collezione</button>
+                <button onClick={() => navigateTo('courses')} className="block text-stone-600 font-medium w-full text-left">Corsi</button>
+                <button onClick={() => navigateTo('beliefs')} className="block text-stone-600 font-medium w-full text-left">In Chi Crediamo</button>
+                <button onClick={() => { setIsContactOpen(true); setIsMobileMenuOpen(false); }} className="block text-stone-600 font-medium w-full text-left">Contatti</button>
                 <div className="border-t border-stone-100 pt-4">
                     {!isAdmin ? (
                         <button 
@@ -246,159 +400,172 @@ function App() {
         )}
       </nav>
 
-      {/* Hero Section */}
-      <header className="relative bg-stone-900 text-white py-24 md:py-32 overflow-hidden">
-        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1507842217343-583bb7270b66?q=80&w=2690&auto=format&fit=crop')] bg-cover bg-center opacity-40"></div>
-        <div className="absolute inset-0 bg-gradient-to-t from-stone-900 via-stone-900/40 to-transparent"></div>
-        
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <h1 className="font-serif text-5xl md:text-7xl font-bold mb-6 tracking-tight animate-in slide-in-from-bottom-5 fade-in duration-700">
-                Discover Worlds <br/> <span className="text-primary-300">Within Pages</span>
-            </h1>
-            <p className="text-lg md:text-xl text-stone-300 max-w-2xl mx-auto mb-10 font-light leading-relaxed animate-in slide-in-from-bottom-5 fade-in duration-700 delay-100">
-                Curated collections for the modern intellect. Dive into our handpicked selection of timeless classics and contemporary masterpieces.
-            </p>
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-in slide-in-from-bottom-5 fade-in duration-700 delay-200">
-                <Button variant="primary" size="lg" className="rounded-full px-8" onClick={() => document.getElementById('collection')?.scrollIntoView({behavior: 'smooth'})}>
-                    Browse Collection
-                </Button>
-                {isAdmin && (
-                    <Button variant="secondary" size="lg" className="rounded-full px-8 bg-white/10 border-white/20 text-white hover:bg-white/20 hover:text-white backdrop-blur-sm" onClick={() => setIsModalOpen(true)}>
-                        <Plus className="mr-2" size={20} /> Add New Book
-                    </Button>
-                )}
-            </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main id="collection" className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 w-full">
-        
-        {/* Admin Toolbar */}
-        {isAdmin && (
-             <div className="mb-8 p-4 bg-stone-50 border border-stone-200 rounded-xl flex flex-wrap items-center gap-4 animate-in fade-in slide-in-from-top-2">
-                <span className="text-sm font-bold text-stone-500 uppercase tracking-wide mr-auto">Admin Tools</span>
-                
-                <input 
-                    type="file" 
-                    accept=".csv" 
-                    ref={csvInputRef} 
-                    className="hidden" 
-                    onChange={handleCSVUpload} 
-                />
-                
-                <Button onClick={() => csvInputRef.current?.click()} variant="secondary" size="sm" className="bg-white">
-                    <Upload size={14} className="mr-2" /> Import CSV
-                </Button>
-
-                <Button onClick={() => setIsMailingListOpen(true)} variant="secondary" size="sm" className="bg-white">
-                    <Mail size={14} className="mr-2" /> Mailing List
-                </Button>
-
-                <Button onClick={() => setIsModalOpen(true)} size="sm">
-                    <Plus size={14} className="mr-2" /> Add Book
-                </Button>
-             </div>
-        )}
-
-        {/* Filter & Search Toolbar */}
-        <div className="flex flex-col gap-6 mb-8">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                    <h2 className="font-serif text-3xl font-bold text-stone-900 mb-1">Curated Collection</h2>
-                    <p className="text-stone-500 text-sm">Showing {books.length} titles</p>
-                </div>
-
-                <div className="relative w-full md:w-80">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Search className="h-5 w-5 text-stone-400" />
+      {/* Main Content Render */}
+      <main className="flex-grow w-full">
+        {currentView === 'home' && (
+            <>
+                {/* Hero Section */}
+                <header className="relative bg-stone-900 text-white py-24 md:py-32 overflow-hidden">
+                    <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1507842217343-583bb7270b66?q=80&w=2690&auto=format&fit=crop')] bg-cover bg-center opacity-40"></div>
+                    <div className="absolute inset-0 bg-gradient-to-t from-stone-900 via-stone-900/40 to-transparent"></div>
+                    
+                    <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+                        <h1 className="font-serif text-5xl md:text-7xl font-bold mb-6 tracking-tight animate-in slide-in-from-bottom-5 fade-in duration-700">
+                            Discover Worlds <br/> <span className="text-primary-300">Within Pages</span>
+                        </h1>
+                        <p className="text-lg md:text-xl text-stone-300 max-w-2xl mx-auto mb-10 font-light leading-relaxed animate-in slide-in-from-bottom-5 fade-in duration-700 delay-100">
+                            Curated collections for the modern intellect. Dive into our handpicked selection of timeless classics and contemporary masterpieces.
+                        </p>
+                        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-in slide-in-from-bottom-5 fade-in duration-700 delay-200">
+                            <Button variant="primary" size="lg" className="rounded-full px-8" onClick={navigateToCollection}>
+                                Browse Collection
+                            </Button>
+                            {isAdmin && (
+                                <Button variant="secondary" size="lg" className="rounded-full px-8 bg-white/10 border-white/20 text-white hover:bg-white/20 hover:text-white backdrop-blur-sm" onClick={() => setIsModalOpen(true)}>
+                                    <Plus className="mr-2" size={20} /> Add New Book
+                                </Button>
+                            )}
+                        </div>
                     </div>
-                    <input
-                        type="text"
-                        placeholder="Search books..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="block w-full pl-10 pr-3 py-2.5 border border-stone-200 rounded-lg leading-5 bg-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 sm:text-sm transition-shadow shadow-sm"
-                    />
-                </div>
-            </div>
-            
-            {/* Category Pills - Visible mainly for explicit filtering, but affects layout */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
-                <Filter size={16} className="text-stone-400 mr-2 flex-shrink-0" />
-                {allGenres.map(genre => (
-                    <button
-                        key={genre}
-                        onClick={() => setSelectedGenre(genre)}
-                        className={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-colors ${
-                            selectedGenre === genre 
-                            ? 'bg-stone-900 text-white' 
-                            : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-                        }`}
-                    >
-                        {genre}
-                    </button>
-                ))}
-            </div>
-        </div>
+                </header>
 
-        {/* Content Area */}
-        {showCarousels ? (
-            /* Carousel View (Default) */
-            <div className="space-y-12 animate-in fade-in duration-500">
-                {Object.entries(booksByGenre).map(([genre, genreBooks]) => (
-                    <div key={genre} className="space-y-4">
-                        <div className="flex items-center justify-between border-b border-stone-100 pb-2">
-                             <h3 className="font-serif text-2xl font-bold text-stone-800">{genre}</h3>
-                             <button onClick={() => setSelectedGenre(genre)} className="text-sm font-medium text-primary-600 hover:text-primary-800 flex items-center gap-1">
-                                View All <ChevronRight size={14} />
-                             </button>
+                {/* Collection Section */}
+                <div id="collection" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+                    {/* Admin Toolbar */}
+                    {isAdmin && (
+                        <div className="mb-8 p-4 bg-stone-50 border border-stone-200 rounded-xl flex flex-wrap items-center gap-4 animate-in fade-in slide-in-from-top-2">
+                            <span className="text-sm font-bold text-stone-500 uppercase tracking-wide mr-auto">Admin Tools</span>
+                            
+                            <input 
+                                type="file" 
+                                accept=".csv, .xml" 
+                                ref={fileInputRef} 
+                                className="hidden" 
+                                onChange={handleDataImport} 
+                            />
+                            
+                            <Button onClick={() => fileInputRef.current?.click()} variant="secondary" size="sm" className="bg-white">
+                                <Upload size={14} className="mr-2" /> Import Data
+                            </Button>
+
+                            <Button onClick={() => setIsMailingListOpen(true)} variant="secondary" size="sm" className="bg-white">
+                                <Mail size={14} className="mr-2" /> Mailing List
+                            </Button>
+
+                            <Button onClick={() => setIsModalOpen(true)} size="sm">
+                                <Plus size={14} className="mr-2" /> Add Book
+                            </Button>
+                        </div>
+                    )}
+
+                    {/* Filter & Search Toolbar */}
+                    <div className="flex flex-col gap-6 mb-8">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div>
+                                <h2 className="font-serif text-3xl font-bold text-stone-900 mb-1">Curated Collection</h2>
+                                <p className="text-stone-500 text-sm">Showing {books.length} titles</p>
+                            </div>
+
+                            <div className="relative w-full md:w-80">
+                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                    <Search className="h-5 w-5 text-stone-400" />
+                                </div>
+                                <input
+                                    type="text"
+                                    placeholder="Search books..."
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="block w-full pl-10 pr-3 py-2.5 border border-stone-200 rounded-lg leading-5 bg-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 sm:text-sm transition-shadow shadow-sm"
+                                />
+                            </div>
                         </div>
                         
-                        <div className="relative group/carousel">
-                            <div className="flex overflow-x-auto gap-4 pb-4 px-1 snap-x no-scrollbar">
-                                {genreBooks.map((book) => (
-                                    <div key={book.id} className="snap-start shrink-0 w-[160px] md:w-[200px]">
+                        {/* Category Pills */}
+                        <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
+                            <Filter size={16} className="text-stone-400 mr-2 flex-shrink-0" />
+                            {allGenres.map(genre => (
+                                <button
+                                    key={genre}
+                                    onClick={() => setSelectedGenre(genre)}
+                                    className={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-colors ${
+                                        selectedGenre === genre 
+                                        ? 'bg-stone-900 text-white' 
+                                        : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                                    }`}
+                                >
+                                    {genre}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Content Area */}
+                    {showCarousels ? (
+                        /* Carousel View (Default) */
+                        <div className="space-y-12 animate-in fade-in duration-500">
+                            {Object.entries(booksByGenre).map(([genre, genreBooks]) => (
+                                <div key={genre} className="space-y-4">
+                                    <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+                                        <h3 className="font-serif text-2xl font-bold text-stone-800">{genre}</h3>
+                                        <button onClick={() => setSelectedGenre(genre)} className="text-sm font-medium text-primary-600 hover:text-primary-800 flex items-center gap-1">
+                                            View All <ChevronRight size={14} />
+                                        </button>
+                                    </div>
+                                    
+                                    <div className="relative group/carousel">
+                                        <div className="flex overflow-x-auto gap-4 pb-4 px-1 snap-x no-scrollbar">
+                                            {genreBooks.map((book) => (
+                                                <div key={book.id} className="snap-start shrink-0 w-[160px] md:w-[200px]">
+                                                    <BookCard 
+                                                        book={book} 
+                                                        isAdmin={isAdmin} 
+                                                        onRemove={handleRemoveBook} 
+                                                        onEdit={handleEditClick}
+                                                        onDetails={setSelectedBook}
+                                                    />
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {/* Visual hint for scrolling on desktop */}
+                                        <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-white to-transparent pointer-events-none md:group-hover/carousel:hidden" />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        /* Grid View (Search Results or Specific Category) */
+                        <div className="animate-in fade-in duration-500">
+                            {filteredBooks.length > 0 ? (
+                                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
+                                {filteredBooks.map((book) => (
+                                    <div key={book.id} className="w-full">
                                         <BookCard 
                                             book={book} 
                                             isAdmin={isAdmin} 
                                             onRemove={handleRemoveBook} 
+                                            onEdit={handleEditClick}
+                                            onDetails={setSelectedBook}
                                         />
                                     </div>
                                 ))}
-                            </div>
-                            {/* Visual hint for scrolling on desktop */}
-                            <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-white to-transparent pointer-events-none md:group-hover/carousel:hidden" />
+                                </div>
+                            ) : (
+                                <div className="text-center py-20 bg-stone-50 rounded-2xl border border-dashed border-stone-200">
+                                    <div className="bg-stone-100 p-4 rounded-full inline-block mb-4">
+                                        <Search className="h-8 w-8 text-stone-400" />
+                                    </div>
+                                    <h3 className="text-lg font-medium text-stone-900">No books found</h3>
+                                    <p className="text-stone-500 mt-1">Try adjusting your filters.</p>
+                                </div>
+                            )}
                         </div>
-                    </div>
-                ))}
-            </div>
-        ) : (
-            /* Grid View (Search Results or Specific Category) */
-            <div className="animate-in fade-in duration-500">
-                {filteredBooks.length > 0 ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
-                    {filteredBooks.map((book) => (
-                        <div key={book.id} className="w-full">
-                            <BookCard 
-                                book={book} 
-                                isAdmin={isAdmin} 
-                                onRemove={handleRemoveBook} 
-                            />
-                        </div>
-                    ))}
-                    </div>
-                ) : (
-                    <div className="text-center py-20 bg-stone-50 rounded-2xl border border-dashed border-stone-200">
-                        <div className="bg-stone-100 p-4 rounded-full inline-block mb-4">
-                            <Search className="h-8 w-8 text-stone-400" />
-                        </div>
-                        <h3 className="text-lg font-medium text-stone-900">No books found</h3>
-                        <p className="text-stone-500 mt-1">Try adjusting your filters.</p>
-                    </div>
-                )}
-            </div>
+                    )}
+                </div>
+            </>
         )}
+
+        {currentView === 'beliefs' && <BeliefsView />}
+        {currentView === 'courses' && <CoursesView />}
 
       </main>
 
@@ -439,10 +606,10 @@ function App() {
                 <div>
                     <h3 className="text-white font-bold mb-4 uppercase text-sm tracking-wider">Explore</h3>
                     <ul className="space-y-3">
-                        <li><a href="#" className="hover:text-white transition-colors">Bestsellers</a></li>
-                        <li><a href="#" className="hover:text-white transition-colors">New Arrivals</a></li>
-                        <li><a href="#" className="hover:text-white transition-colors">Staff Picks</a></li>
-                        <li><a href="#" className="hover:text-white transition-colors">Genres</a></li>
+                        <li><button onClick={navigateToHome} className="hover:text-white transition-colors text-left">Home</button></li>
+                        <li><button onClick={() => navigateTo('courses')} className="hover:text-white transition-colors text-left">Corsi</button></li>
+                        <li><button onClick={() => navigateTo('beliefs')} className="hover:text-white transition-colors text-left">In Chi Crediamo</button></li>
+                        <li><button onClick={navigateToCollection} className="hover:text-white transition-colors text-left">Collezione</button></li>
                     </ul>
                 </div>
 
@@ -471,8 +638,9 @@ function App() {
       {/* Modals */}
       <AdminModal 
         isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        onAddBook={handleAddBook}
+        onClose={handleModalClose} 
+        onSave={handleSaveBook}
+        bookToEdit={editingBook}
       />
       
       <LoginModal 
@@ -491,6 +659,11 @@ function App() {
         onClose={() => setIsMailingListOpen(false)}
         subscribers={subscribers}
         onRemove={handleRemoveSubscriber}
+      />
+
+      <BookDetailsModal 
+        book={selectedBook} 
+        onClose={() => setSelectedBook(null)} 
       />
 
     </div>

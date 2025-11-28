@@ -1,16 +1,17 @@
-import React, { useState, useRef } from 'react';
-import { X, Sparkles, BookOpen, User, DollarSign, Image as ImageIcon, Tag, Upload } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { X, Sparkles, BookOpen, User, DollarSign, Image as ImageIcon, Tag, Upload, Trash2 } from 'lucide-react';
 import { Button } from './Button';
-import { BookFormData } from '../types';
+import { BookFormData, Book } from '../types';
 import { generateBookDetails } from '../services/geminiService';
 
 interface AdminModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAddBook: (book: BookFormData) => void;
+  onSave: (book: BookFormData) => void;
+  bookToEdit?: Book | null;
 }
 
-export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onAddBook }) => {
+export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onSave, bookToEdit }) => {
   const [formData, setFormData] = useState<BookFormData>({
     title: '',
     author: '',
@@ -22,6 +23,32 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onAddBo
   const [isGenerating, setIsGenerating] = useState(false);
   const [uploadMode, setUploadMode] = useState<'url' | 'file'>('url');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Reset or Populate form when modal opens/changes
+  useEffect(() => {
+    if (isOpen) {
+        if (bookToEdit) {
+            setFormData({
+                title: bookToEdit.title,
+                author: bookToEdit.author,
+                price: bookToEdit.price.toString(),
+                description: bookToEdit.description,
+                coverUrl: bookToEdit.coverUrl,
+                genre: bookToEdit.genre
+            });
+            // Auto-detect upload mode based on url content roughly
+            if (bookToEdit.coverUrl.startsWith('data:')) {
+                setUploadMode('file');
+            } else {
+                setUploadMode('url');
+            }
+        } else {
+            // Reset for new book
+            setFormData({ title: '', author: '', price: '', description: '', coverUrl: '', genre: '' });
+            setUploadMode('url');
+        }
+    }
+  }, [isOpen, bookToEdit]);
 
   if (!isOpen) return null;
 
@@ -39,6 +66,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onAddBo
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const handleRemoveImage = () => {
+      setFormData(prev => ({ ...prev, coverUrl: '' }));
+      if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleAutoFill = async () => {
@@ -68,8 +100,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onAddBo
         ...formData,
         coverUrl: formData.coverUrl || `https://picsum.photos/seed/${Math.random()}/400/600`
     };
-    onAddBook(finalData);
-    setFormData({ title: '', author: '', price: '', description: '', coverUrl: '', genre: '' });
+    onSave(finalData);
     onClose();
   };
 
@@ -77,7 +108,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onAddBo
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between p-6 border-b border-stone-100 bg-stone-50">
-          <h2 className="text-xl font-serif font-bold text-stone-900">Add New Book</h2>
+          <h2 className="text-xl font-serif font-bold text-stone-900">
+            {bookToEdit ? 'Edit Book' : 'Add New Book'}
+          </h2>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-600 transition-colors">
             <X size={24} />
           </button>
@@ -100,7 +133,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onAddBo
                   placeholder="e.g. The Great Gatsby"
                 />
             </div>
-            {formData.title.length > 3 && (
+            {formData.title.length > 3 && !bookToEdit && (
                 <button
                     type="button"
                     onClick={handleAutoFill}
@@ -224,7 +257,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onAddBo
                          onClick={() => fileInputRef.current?.click()}
                        >
                           <Upload size={16} className="mr-2" />
-                          {formData.coverUrl && formData.coverUrl.startsWith('data:') ? 'Image Selected' : 'Choose File'}
+                          Choose File
                        </Button>
                    </div>
                  )}
@@ -232,9 +265,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onAddBo
           </div>
           
           {formData.coverUrl && (
-             <div className="w-full h-24 rounded-lg bg-stone-100 overflow-hidden relative border border-stone-200">
-                 <img src={formData.coverUrl} alt="Preview" className="w-full h-full object-cover opacity-80" />
-                 <span className="absolute bottom-1 right-2 text-xs bg-white/80 px-1 rounded text-stone-600">Preview</span>
+             <div className="w-full h-24 rounded-lg bg-stone-100 overflow-hidden relative border border-stone-200 group">
+                 <img src={formData.coverUrl} alt="Preview" className="w-full h-full object-cover opacity-90" />
+                 <button 
+                    type="button"
+                    onClick={handleRemoveImage}
+                    className="absolute top-2 right-2 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Remove Image"
+                 >
+                     <X size={12} />
+                 </button>
              </div>
           )}
 
@@ -253,7 +293,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, onAddBo
 
           <div className="flex justify-end pt-2 gap-3">
             <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button type="submit" variant="primary">Add to Collection</Button>
+            <Button type="submit" variant="primary">
+                {bookToEdit ? 'Save Changes' : 'Add to Collection'}
+            </Button>
           </div>
         </form>
       </div>

@@ -24,3 +24,5 @@ export interface Subscriber {
 }
 
 export type ViewMode = 'home' | 'admin';
+
+export type PageView = 'home' | 'courses' | 'beliefs';

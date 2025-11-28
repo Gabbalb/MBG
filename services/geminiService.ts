@@ -1,9 +1,6 @@
-import { GoogleGenAI, Type } from "@google/genai";
 
-// We use the available environment variable for the API key
-const apiKey = process.env.API_KEY || '';
-
-const ai = new GoogleGenAI({ apiKey });
+// Mock service replacing Gemini implementation
+// This file is kept to maintain import consistency in AdminModal
 
 export interface GeneratedBookDetails {
   description: string;
@@ -13,47 +10,19 @@ export interface GeneratedBookDetails {
 
 /**
  * Generates a description, genre, and estimated price for a book based on title and author.
+ * This is a mock implementation that does not use the Gemini API.
  */
 export const generateBookDetails = async (title: string, author: string): Promise<GeneratedBookDetails> => {
-  if (!apiKey) {
-    console.warn("No API Key found. Returning mock data.");
-    return {
-      description: "API Key missing. This is a placeholder description.",
-      genre: "General",
-      suggestedPrice: 19.99
-    };
-  }
+  // Simulate network delay to mimic API call
+  await new Promise(resolve => setTimeout(resolve, 800));
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: `Generate a compelling short description (max 50 words), a fitting genre, and a suggested realistic price (number only) for a book titled "${title}" by author "${author}".`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            description: { type: Type.STRING },
-            genre: { type: Type.STRING },
-            suggestedPrice: { type: Type.NUMBER },
-          },
-          required: ["description", "genre", "suggestedPrice"],
-        },
-      },
-    });
+  const genres = ['Fiction', 'Mystery', 'Science Fiction', 'Romance', 'History', 'Thriller', 'Biography', 'Fantasy'];
+  const randomGenre = genres[Math.floor(Math.random() * genres.length)];
+  const randomPrice = parseFloat((Math.random() * (45 - 12) + 12).toFixed(2));
 
-    if (response.text) {
-      return JSON.parse(response.text) as GeneratedBookDetails;
-    }
-    throw new Error("No response text from Gemini");
-
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    // Fallback if API fails
-    return {
-      description: "An intriguing book waiting to be read.",
-      genre: "Fiction",
-      suggestedPrice: 20.00
-    };
-  }
+  return {
+    description: `[Auto-Generated] A captivating story titled "${title}" by ${author}. This is a placeholder description generated locally to simulate content filling without an external API connection.`,
+    genre: randomGenre,
+    suggestedPrice: randomPrice
+  };
 };

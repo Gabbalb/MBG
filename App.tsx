@@ -7,7 +7,7 @@ import { LoginModal } from './components/LoginModal';
 import { ContactModal } from './components/ContactModal';
 import { MailingListModal } from './components/MailingListModal';
 import { Button } from './components/Button';
-import { Library, Search, Plus, Menu, X, Facebook, Twitter, Instagram, Upload, Filter, LogOut, User, Mail, Send } from 'lucide-react';
+import { Library, Search, Plus, Menu, X, Facebook, Twitter, Instagram, Upload, Filter, LogOut, User, Mail, Send, ChevronRight } from 'lucide-react';
 
 function App() {
   const [books, setBooks] = useState<Book[]>([]);
@@ -150,6 +150,20 @@ function App() {
       setIsMobileMenuOpen(false);
   };
 
+  // Group books by genre for the carousel view
+  const booksByGenre = React.useMemo(() => {
+    const groups: { [key: string]: Book[] } = {};
+    books.forEach(book => {
+        if (!groups[book.genre]) {
+            groups[book.genre] = [];
+        }
+        groups[book.genre].push(book);
+    });
+    return groups;
+  }, [books]);
+
+  const showCarousels = searchQuery === '' && selectedGenre === 'All';
+
   return (
     <div className="min-h-screen flex flex-col font-sans text-stone-800">
       
@@ -258,7 +272,7 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main id="collection" className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 w-full">
+      <main id="collection" className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 w-full">
         
         {/* Admin Toolbar */}
         {isAdmin && (
@@ -292,7 +306,7 @@ function App() {
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                     <h2 className="font-serif text-3xl font-bold text-stone-900 mb-1">Curated Collection</h2>
-                    <p className="text-stone-500 text-sm">Showing {filteredBooks.length} titles</p>
+                    <p className="text-stone-500 text-sm">Showing {books.length} titles</p>
                 </div>
 
                 <div className="relative w-full md:w-80">
@@ -309,7 +323,7 @@ function App() {
                 </div>
             </div>
             
-            {/* Category Pills */}
+            {/* Category Pills - Visible mainly for explicit filtering, but affects layout */}
             <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
                 <Filter size={16} className="text-stone-400 mr-2 flex-shrink-0" />
                 {allGenres.map(genre => (
@@ -328,25 +342,61 @@ function App() {
             </div>
         </div>
 
-        {/* Grid */}
-        {filteredBooks.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-            {filteredBooks.map((book) => (
-                <BookCard 
-                    key={book.id} 
-                    book={book} 
-                    isAdmin={isAdmin} 
-                    onRemove={handleRemoveBook} 
-                />
-            ))}
+        {/* Content Area */}
+        {showCarousels ? (
+            /* Carousel View (Default) */
+            <div className="space-y-12 animate-in fade-in duration-500">
+                {Object.entries(booksByGenre).map(([genre, genreBooks]) => (
+                    <div key={genre} className="space-y-4">
+                        <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+                             <h3 className="font-serif text-2xl font-bold text-stone-800">{genre}</h3>
+                             <button onClick={() => setSelectedGenre(genre)} className="text-sm font-medium text-primary-600 hover:text-primary-800 flex items-center gap-1">
+                                View All <ChevronRight size={14} />
+                             </button>
+                        </div>
+                        
+                        <div className="relative group/carousel">
+                            <div className="flex overflow-x-auto gap-4 pb-4 px-1 snap-x no-scrollbar">
+                                {genreBooks.map((book) => (
+                                    <div key={book.id} className="snap-start shrink-0 w-[160px] md:w-[200px]">
+                                        <BookCard 
+                                            book={book} 
+                                            isAdmin={isAdmin} 
+                                            onRemove={handleRemoveBook} 
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                            {/* Visual hint for scrolling on desktop */}
+                            <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-white to-transparent pointer-events-none md:group-hover/carousel:hidden" />
+                        </div>
+                    </div>
+                ))}
             </div>
         ) : (
-            <div className="text-center py-20 bg-stone-50 rounded-2xl border border-dashed border-stone-200">
-                <div className="bg-stone-100 p-4 rounded-full inline-block mb-4">
-                    <Search className="h-8 w-8 text-stone-400" />
-                </div>
-                <h3 className="text-lg font-medium text-stone-900">No books found</h3>
-                <p className="text-stone-500 mt-1">Try adjusting your filters.</p>
+            /* Grid View (Search Results or Specific Category) */
+            <div className="animate-in fade-in duration-500">
+                {filteredBooks.length > 0 ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
+                    {filteredBooks.map((book) => (
+                        <div key={book.id} className="w-full">
+                            <BookCard 
+                                book={book} 
+                                isAdmin={isAdmin} 
+                                onRemove={handleRemoveBook} 
+                            />
+                        </div>
+                    ))}
+                    </div>
+                ) : (
+                    <div className="text-center py-20 bg-stone-50 rounded-2xl border border-dashed border-stone-200">
+                        <div className="bg-stone-100 p-4 rounded-full inline-block mb-4">
+                            <Search className="h-8 w-8 text-stone-400" />
+                        </div>
+                        <h3 className="text-lg font-medium text-stone-900">No books found</h3>
+                        <p className="text-stone-500 mt-1">Try adjusting your filters.</p>
+                    </div>
+                )}
             </div>
         )}
 
